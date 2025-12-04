@@ -7,11 +7,17 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import logging
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 ENTRIES_FILE = DATA_DIR / "entries.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s'
+)
 
 
 class DataManager:
@@ -94,36 +100,49 @@ class DataManager:
             current += timedelta(days=1)
 
         return week_entries
+   
+    def remove_end_time(self, date_str):
+        """Remove end_time from specific date in entries.json."""
+        entries_path = os.path.join("data", "entries.json")
+        # Load the file
+        try:
+            with open(entries_path, "r") as f:
+                entries = json.load(f)
+        except FileNotFoundError:
+            entries = {}
+        # Remove end_time for the specified date
+        if date_str in entries and "end_time" in entries[date_str]:
+            del entries[date_str]["end_time"]
+            # Save file
+            with open(entries_path, "w") as f:
+                json.dump(entries, f, indent=2)
 
-    def calculate_daily_work_hours(self, date: str) -> float:
-        """Calculate work hours for a specific date (excluding break time).
-        
-        Returns hours as a float.
-        """
-        entry = self.get_entry(date)
+    def calculate_daily_work_hours(self, date_str):
+        entry = self.get_entry(date_str)
         if not entry or "start_time" not in entry:
             return 0.0
 
+        start_time = entry["start_time"]
+
+        # If it's ongoing, use current time
+        end_time = entry.get("end_time")
+        if not end_time or end_time in ("ongoing", "None"):
+            # Use now as end_time for calculation, or return a special value
+            now = datetime.now().strftime("%H:%M")
+            end_time = now
+
         try:
-            start = datetime.strptime(entry["start_time"], "%H:%M")
-            
-            # Use end_time if available, otherwise use current time for today
-            if "end_time" in entry:
-                end = datetime.strptime(entry["end_time"], "%H:%M")
-            else:
-                date_obj = datetime.strptime(date, "%Y-%m-%d")
-                today = datetime.now().strftime("%Y-%m-%d")
-                if date == today:
-                    end = datetime.now()
-                else:
-                    return 0.0
-
-            duration_minutes = (end - start).total_seconds() / 60
-            break_time = self.settings.get("break_time", 30)
-            work_minutes = max(0, duration_minutes - break_time)
-            return work_minutes / 60
-
-        except ValueError:
+            t_start = datetime.strptime(f"{date_str} {start_time}", "%Y-%m-%d %H:%M")
+            t_end = datetime.strptime(f"{date_str} {end_time}", "%Y-%m-%d %H:%M")
+            # fix if working overnight (very rare): add a day if end before start
+            if t_end < t_start:
+                t_end += timedelta(days=1)
+            duration = (t_end - t_start).total_seconds() / 3600
+            duration -= self.get_break_time() / 60    # subtract break as hours
+            return max(duration, 0)
+        except Exception as e:
+            # Log and fail hard, never return nonsense
+            logging.error(f"Failed to calculate work hours for {date_str}: {e}")
             return 0.0
 
     def calculate_weekly_work_hours(self, target_date: Optional[str] = None) -> float:

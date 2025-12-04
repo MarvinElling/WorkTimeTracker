@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
     QSpinBox, QDoubleSpinBox, QTimeEdit, QDateEdit, QMessageBox,
-    QTabWidget, QFormLayout, QGroupBox, QComboBox, QDialog
+    QTabWidget, QFormLayout, QGroupBox, QComboBox, QDialog, QCheckBox
 )
 from PyQt5.QtCore import Qt, QTime, QDate, QTimer
 from PyQt5.QtGui import QFont
@@ -134,9 +134,16 @@ class WorkTimeTracker(QMainWindow):
         # Ending time (optional)
         end_layout = QHBoxLayout()
         end_layout.addWidget(QLabel("Ending Time (optional):"))
+       
+        self.ongoing_checkbox = QCheckBox("Now")
+        self.ongoing_checkbox.setChecked(False)
+        self.ongoing_checkbox.stateChanged.connect(self.on_ongoing_checkbox_changed)
+        end_layout.addWidget(self.ongoing_checkbox)
+
         self.today_end_time = QTimeEdit()
         self.today_end_time.setTime(QTime.currentTime())
         end_layout.addWidget(self.today_end_time)
+
         self.save_end_btn = QPushButton("Save End Time")
         self.save_end_btn.clicked.connect(self.save_today_end_time)
         end_layout.addWidget(self.save_end_btn)
@@ -342,24 +349,36 @@ class WorkTimeTracker(QMainWindow):
             QMessageBox.warning(self, "Error", "Please set start time first!")
             return
 
-        end_time = self.today_end_time.time().toString("HH:mm")
-        self.data_manager.add_entry(today, entry["start_time"], end_time)
-        QMessageBox.information(self, "Success", "End time saved!")
+        if self.ongoing_checkbox.isChecked():
+            # Save as ongoing: remove 'end_time' or set to None/"ongoing"
+            self.data_manager.remove_end_time(today)
+            QMessageBox.information(self, "Success", "Marked as ongoing!")
+            end_time = 'ongoing'
+            if today in self.data_manager.entries and "end_time" in self.data_manager.entries[today]:
+                del self.data_manager.entries[today]["end_time"]
+        else:
+            end_time = self.today_end_time.time().toString("HH:mm")
+            self.data_manager.add_entry(today, entry["start_time"], end_time)
+            QMessageBox.information(self, "Success", "End time saved!")
         self.update_display()
 
     def load_today_data(self):
-        """Load today's data and update UI."""
         today = datetime.now().strftime("%Y-%m-%d")
         entry = self.data_manager.get_today_entry()
-
         if entry:
             if "start_time" in entry:
                 time_parts = entry["start_time"].split(":")
                 self.today_start_time.setTime(QTime(int(time_parts[0]), int(time_parts[1])))
 
-            if "end_time" in entry:
-                time_parts = entry["end_time"].split(":")
+            end_time_val = entry.get("end_time", None)
+            if end_time_val and end_time_val not in ("None", "ongoing"):
+                time_parts = end_time_val.split(":")
                 self.today_end_time.setTime(QTime(int(time_parts[0]), int(time_parts[1])))
+                self.ongoing_checkbox.setChecked(False)
+            else:
+                self.ongoing_checkbox.setChecked(True)
+        else:
+            self.ongoing_checkbox.setChecked(False)
 
     def load_edit_date_data(self):
         """Load data for the selected date in edit tab."""
@@ -424,7 +443,7 @@ class WorkTimeTracker(QMainWindow):
         today_hours = self.data_manager.calculate_daily_work_hours(today)
         hours_int = int(today_hours)
         minutes = int((today_hours - hours_int) * 60)
-        self.today_work_time_label.setText(f"{hours_int}h {minutes}m")
+        self.today_work_time_label.setText(f"{hours_int%24}h {minutes}m")
 
         # Update break time display
         self.today_break_label.setText(f"{self.data_manager.get_break_time()} minutes")
@@ -445,10 +464,21 @@ class WorkTimeTracker(QMainWindow):
         # Update weekly summary
         self.update_weekly_summary()
 
+    def on_ongoing_checkbox_changed(self, state):
+        if self.ongoing_checkbox.isChecked():
+            today = datetime.now().strftime("%Y-%m-%d")
+            self.data_manager.remove_end_time(today)
+            if today in self.data_manager.entries and "end_time" in self.data_manager.entries[today]:
+                del self.data_manager.entries[today]["end_time"]
+            self.today_end_time.setEnabled(False)
+            self.update_display() 
+        else:
+            self.today_end_time.setEnabled(True)
+
     def update_weekly_summary(self):
         """Update the weekly summary tab."""
         week_entries = self.data_manager.get_entries_for_week()
-        
+      
         self.weekly_table.setRowCount(0)
 
         total_hours = 0.0
